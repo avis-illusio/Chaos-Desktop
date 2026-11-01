@@ -1,0 +1,30 @@
+[package]
+name = "chaos-desktop"
+version = "0.1.0"
+edition = "2024"
+description = "Workspace anchor for the Chaos Desktop crates"
+publish = false
+
+# 说明：本包不含实际逻辑，只作为 workspace 根包存在。
+# 保留它是因为 `cargo onedoc` 需要一个根包来取 manifest 元数据；
+# 若改成纯虚拟 workspace，文档生成就得额外传 -p。
+
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+chaos-path = { path = "crates/chaos-path" }
+cdc-parser = { path = "crates/cdc-parser" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }

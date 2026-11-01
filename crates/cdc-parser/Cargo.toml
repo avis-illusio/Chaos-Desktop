@@ -1,0 +1,12 @@
+[package]
+name = "cdc-parser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Chaos Desktop Command (.cdc) 的词法、AST 与诊断"
+
+[dependencies]
+
+[lints]
+workspace = true

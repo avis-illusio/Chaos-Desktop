@@ -1,0 +1,18 @@
+[package]
+name = "cdc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Chaos Desktop Command 执行器"
+
+[[bin]]
+name = "cdc"
+path = "src/main.rs"
+
+[dependencies]
+cdc-parser = { workspace = true }
+chaos-path = { workspace = true }
+
+[lints]
+workspace = true

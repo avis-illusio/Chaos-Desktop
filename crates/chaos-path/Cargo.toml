@@ -1,0 +1,12 @@
+[package]
+name = "chaos-path"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Chaos Desktop 的路径解析：/、..、$HOME、~ 四个特殊内容"
+
+[dependencies]
+
+[lints]
+workspace = true

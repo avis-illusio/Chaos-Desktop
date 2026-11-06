@@ -1,6 +1,6 @@
 # 快速开始
 
-目前没有可运行的程序（阶段 0 未开工）。以下是仓库自身的构建与文档命令。
+`cdc` 已经可用，合成器还没开始。以下是仓库自身的构建与文档命令。
 
 ```sh
 cargo build --workspace              # 构建
@@ -11,7 +11,7 @@ cargo fmt --check
 
 ## 文档
 
-文档由 `cargo-onedoc` 从 `docs/src/` 合成，`README.md` 与 `docs/design.md` 都是生成物。
+技术文档由 `cargo-onedoc` 从 `docs/src/` 合成到 `docs/design.md`；`README.md` 是手写的，不经生成。
 
 ```sh
 cargo install cargo-onedoc --version 0.3.2 --locked   # 装到 ~/.cargo/bin

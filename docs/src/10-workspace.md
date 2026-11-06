@@ -5,7 +5,8 @@
 ```text
 chaos-desktop/
 ├─ Cargo.toml              # workspace 根（含一个只作锚点的根包）
-├─ onedoc.toml             # 文档生成配置（README.md / docs/design.md）
+├─ README.md               # 手写：定位与特性，不放技术细节
+├─ onedoc.toml             # 文档生成配置（只产出 docs/design.md）
 ├─ crates/
 │  ├─ chaos-path/          # ✅ FilePath/DirPath 解析（零依赖）
 │  ├─ cdc-parser/          # ✅ .cdc 词法 / 缩进树 / AST / 诊断

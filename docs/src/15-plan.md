@@ -9,7 +9,7 @@
 | 阶段 | 内容 | 出口标准 | 周 |
 |---|---|---|---|
 | 0 地基 | `chaos-path` / `cdc-parser` / `chaos-config` / `chaos-ipc` / `cdc` CLI / 设置应用最小版 | 在 KDE 里可用 `cdc validate` 与设置应用；零图形依赖；全链路有测试 | 4–5 |
-| 1 合成器 | winit + udev 双后端、DRM/GBM/EGL、libinput、xdg-shell、activation | TTY 下跑 kitty 能打字能退出；udev 与 winit 共用同一 `State` | 5–6 |
+| 1 合成器 | `--nested`（winit，默认开发形态）+ `--headless`（CI）+ udev/DRM、libinput、xdg-shell、activation | 嵌套窗口里跑 kitty 能打字能退出；`--headless` 能出帧；TTY 带看门狗验证 | 5–6 |
 | 2 平铺 | `LayoutEngine`、configure 回路、焦点/移动、layer-shell + popup | 10 窗口不闪烁；waybar 可挂且独占区生效 | 4 |
 | 3 配置接入 | 在线配置服务、热重载、快照回退、systemd 托管 | 坏配置连续失败两次 → 自动进恢复模式 | 2–3 |
 | 4 in-shell | `chaos-settings --in-shell` 子进程 | `kill -9` 面板不影响合成器；禁用后面板功能对等 | 2 |

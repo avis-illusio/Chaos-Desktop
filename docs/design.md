@@ -10,6 +10,10 @@
 
 ## 目录
 
+- [硬约束](#硬约束)
+- [快速开始](#快速开始)
+  - [文档](#文档)
+  - [依赖](#依赖)
 - [仓库布局](#仓库布局)
   - [依赖方向](#依赖方向)
 - [架构](#架构)
@@ -27,6 +31,17 @@
   - [路径](#路径)
   - [诊断码](#诊断码)
   - [CLI 与退出码](#cli-与退出码)
+  - [命令表 v0.2（规划）](#命令表-v02规划)
+    - [win —— 窗口](#win--窗口)
+    - [白板模型（拼图）](#白板模型拼图)
+    - [pz —— 全景](#pz--全景)
+    - [ws / out —— 工作区与输出](#ws--out--工作区与输出)
+    - [layout —— 布局](#layout--布局)
+    - [dock —— Dock](#dock--dock)
+    - [theme / bg / deco —— 外观](#theme--bg--deco--外观)
+    - [query —— 查询](#query--查询)
+    - [控制](#控制)
+    - [`@persist`](#persist)
   - [尚未实现](#尚未实现)
 - [配置系统契约](#配置系统契约)
   - [格式与解析](#格式与解析)
@@ -52,6 +67,10 @@
   - [D11 进程创建统一走 `chaos-proc`](#d11-进程创建统一走-chaos-proc)
   - [D12 PZ 几何：局部视野 1/9 ↔ 全景视野 1/1](#d12-pz-几何局部视野-19--全景视野-11)
   - [待验证 spike](#待验证-spike)
+  - [D13 白板 = 严格不重叠的自动拼图](#d13-白板--严格不重叠的自动拼图)
+  - [D14 装饰：默认无标题栏，单应用可切 CSD / SSD](#d14-装饰默认无标题栏单应用可切-csd--ssd)
+  - [D15 默认不持久化，`@persist` 身份才写回](#d15-默认不持久化persist-身份才写回)
+  - [D16 测试形态：嵌套窗口优先，TTY 只做验证](#d16-测试形态嵌套窗口优先tty-只做验证)
 - [实施计划](#实施计划)
   - [阶段](#阶段)
   - [里程碑](#里程碑)
@@ -61,6 +80,8 @@
 - [规格缺口与默认取值](#规格缺口与默认取值)
   - [交接文档「待确认事项」对账](#交接文档待确认事项对账)
   - [仍未收敛、按默认值推进的两处](#仍未收敛按默认值推进的两处)
+  - [G17 拼图装箱的细节（默认值）](#g17-拼图装箱的细节默认值)
+  - [G18 嵌套模式的验收标准（默认值）](#g18-嵌套模式的验收标准默认值)
 - [工程规范](#工程规范)
   - [环境](#环境)
   - [文档规范](#文档规范)
@@ -68,14 +89,61 @@
   - [CI 门禁](#ci-门禁)
   - [红线](#红线)
   - [提交](#提交)
+  - [测试形态（按危险度递增）](#测试形态按危险度递增)
   - [TTY 测试守则](#tty-测试守则)
+  - [预览与截图](#预览与截图)
 
 
+## 硬约束
+
+- **全栈纯 Rust 运行时**：不引入解释器、VM、脚本引擎（QML / Python / Lua / Node）；链接 libwayland、libEGL 这类系统 C 库不算破坏约束。
+- **不软链系统库**：卫星工具用 `provides` / `conflicts` 声明。
+- **`.cdc` 是封闭命令集合**：不存在任意 shell 语法；复杂逻辑走 `.sh`，只能由 `xfile` 进入。
+- **`unsafe` 只在合成器 crate 内允许**，且必须注释安全前提。
+
+## 快速开始
+
+`cdc` 已经可用，合成器还没开始。以下是仓库自身的构建与文档命令。
+
+```sh
+cargo build --workspace              # 构建
+cargo test  --workspace              # 测试
+cargo clippy --all-targets -- -D warnings
+cargo fmt --check
+```
+
+### 文档
+
+技术文档由 `cargo-onedoc` 从 `docs/src/` 合成到 `docs/design.md`；`README.md` 是手写的，不经生成。
+
+```sh
+cargo install cargo-onedoc --version 0.3.2 --locked   # 装到 ~/.cargo/bin
+
+cargo onedoc           # 重新生成
+cargo onedoc --check   # CI：生成物是否过期
+```
+
+若 `~/.cargo` 只读，装到仓库内（`target/` 已忽略）：`CARGO_HOME="$PWD/target/cargo-home" cargo install cargo-onedoc --version 0.3.2 --locked --root "$PWD/target/onedoc-tool"`，然后跑 `./target/onedoc-tool/bin/cargo-onedoc onedoc`。
+
+### 依赖
+
+- 合成器：`smithay = "=0.7.0"`（精确 pin）
+- Shell UI：`slint = "1.18"` + `renderer-software`
+- Wayland 客户端：`smithay-client-toolkit = "0.21"`
+- 事件循环：`calloop = "0.14"`
+- 配置读写：`toml_edit = "0.25"`
+
+工具链固定 **rustc 1.99.0 / edition 2024**，只支持 Linux + Wayland，不建跨平台 CI 矩阵。
+
+## 仓库布局
+
+目标是 workspace 多 crate；当前只有根清单与空 `src/main.rs`，拆分为阶段 0.1 的第一件事。
 
 ```text
 chaos-desktop/
 ├─ Cargo.toml              # workspace 根（含一个只作锚点的根包）
-├─ onedoc.toml             # 文档生成配置（README.md / docs/design.md）
+├─ README.md               # 手写：定位与特性，不放技术细节
+├─ onedoc.toml             # 文档生成配置（只产出 docs/design.md）
 ├─ crates/
 │  ├─ chaos-path/          # ✅ FilePath/DirPath 解析（零依赖）
 │  ├─ cdc-parser/          # ✅ .cdc 词法 / 缩进树 / AST / 诊断
@@ -271,10 +339,153 @@ cdc --verbose <file.cdc>     # 打印每条被执行的命令
 |2|用法错误 / 读不了文件 / IPC 不可用|
 |3|解析失败，未执行任何命令|
 
+### 命令表 v0.2（规划）
+
+**范围**：cdc 只做「窗口 + 合成器」的交互。应用启动、配置读写、通知、截图、剪贴板不属于 cdc。
+
+状态：`已实现` = 现在能跑；`规划` = 等合成器 / IPC。
+
+#### win —— 窗口
+
+|命令|语义|状态|
+|--|--|--|
+|`win focus next` / `prev`|循环焦点|规划|
+|`win focus left\|right\|up\|down`|方向焦点（几何最近邻）|规划|
+|`win focus last`|回到上一个焦点窗口|规划|
+|`win focus --match app_id=…`|按条件选中|规划|
+|`win move left\|right\|up\|down`|该方向有空隙则平移，否则与最近邻交换|规划|
+|`win swap --with <match>`|与指定窗口交换两块|规划|
+|`win place X Y`|绝对移动；会重叠则拒绝|规划|
+|`win resize WxH`|绝对尺寸（受 min/max 约束）|规划|
+|`win resize grow\|shrink [px]`|相对尺寸；只吃空隙，压到邻窗拒绝|规划|
+|`win close`|发 `xdg_toplevel.close`|规划|
+|`win stash`|从画布收起，Dock 留位|规划|
+|`win restore [--match …]`|还原收起的窗口|规划|
+|`win opacity 0.0–1.0`|单窗透明度（会话级）|规划|
+|`win decorate none\|csd\|ssd`|单窗装饰模式|规划|
+|`win float toggle`|脱离拼图约束：可重叠、置顶|规划|
+|`win fullscreen toggle`|全屏|规划|
+|`win maximize toggle`|占满**当前局部视口**（不是整块画布）|规划|
+|`win pin`|跨工作区粘性|规划|
+|`win center`|居中到当前视口|规划|
+|`win raise` / `win lower`|层级（float / 叠层用）|规划|
+|`win retry`|重试处于 pending 的窗口|规划|
+
+#### 白板模型（拼图）
+
+平铺不是列式也不是主栈，而是**严格不重叠的自动拼图**：
+
+1. **摆放区域** = 当前工作区的 3×3 画布（与 PZ 同源）。
+1. **新窗口**按 `preferred size` 找空隙；找不到就缩到 `min_size` 再找；仍然找不到 → 进入 **pending**。
+1. **pending**：不 map、Dock 显示「待放置」占位、合成器给一次提示。用户调整布局后 `win retry` 重试（布局每次变动也自动重试一次）。
+1. **落点优先级**：当前局部视口内 → 视口外由近及远。
+1. **move**：目标方向有空隙就平移过去；没有空隙就与最近邻交换。
+1. **resize**：只允许吃掉空隙；压到邻窗 → 拒绝并提示（不自动推挤，行为可预测优先）。
+1. **float 是唯一允许重叠的状态**；退出 float 时若放不下，退回 pending。
+1. 网格只用于吸附参考，不是约束：块可以是不规则尺寸。
+
+#### pz —— 全景
+
+|命令|语义|
+|--|--|
+|`pz toggle` / `pz on` / `pz off`|局部 1/9 ↔ 全景 1/3 显示|
+|`pz center X Y`|把视口中心挪到画布坐标|
+|`pz land X Y`|落地：跳到该点并回到局部视图|
+|`pz zoom 3`|改画布倍率（默认 3）|
+|`pz animate 200`|动画时长，0 为瞬切|
+|`pz state`|查询倍率、视口、聚焦输出|
+
+#### ws / out —— 工作区与输出
+
+|命令|语义|
+|--|--|
+|`ws switch N` / `next` / `prev`|切工作区|
+|`ws send N` / `ws send --all N`|把当前窗口 / 整块画布送到 N|
+|`ws list` / `ws rename <name>`|列出 / 命名|
+|`out focus next`|输出间切焦点|
+|`out set scale 1.5`|输出缩放|
+|`out set transform normal\|90\|180\|270`|旋转|
+|`out set mode WxH@Hz`|分辨率 / 刷新率|
+|`out set position X,Y`|逻辑坐标|
+|`out enable` / `out disable` / `out set primary`|开关 / 主输出|
+
+不做 `out mirror`：镜像要单独走一条渲染合成路径，收益不抵成本。
+
+#### layout —— 布局
+
+|命令|语义|
+|--|--|
+|`layout gap inner\|outer N`|块间距与画布边距|
+|`layout retry`|对所有 pending 窗口重新装箱|
+|`layout rule add app_id=… [ws=N] [float] [deco=…] [opacity=…]`|窗口规则（声明式，持久）|
+
+没有 `layout set`：当前只有拼图一种引擎。
+
+#### dock —— Dock
+
+|命令|语义|
+|--|--|
+|`dock show` / `dock hide`|Dock 自身显隐|
+|`dock mode always\|auto\|intellihide\|hidden`|常驻 / 触边唤出 / 被遮挡时隐藏 / 永不显示|
+|`dock position bottom\|top\|left\|right`|贴边位置（每输出各自一份）|
+|`dock opacity 0.0–1.0`|背景透明度|
+|`dock size 48`|厚度（高度或宽度）|
+|`dock slot <component> start\|center\|end [order N]`|内部站位分配|
+|`dock component add\|remove <kind>`|组件开关|
+
+组件：`icons`（应用图标/固定启动器）、`workspaces`（工作区指示）、`pz`（PZ 按钮）、`clock`、`tray`（StatusNotifier）、`custom`（脚本输出文本）。
+
+#### theme / bg / deco —— 外观
+
+|命令|语义|
+|--|--|
+|`theme set <name>` / `theme list`|切换 / 列出主题|
+|`theme mode light\|dark\|auto`|亮暗；auto 按时间|
+|`bg set <color\|path\|gradient>`|背景，默认全局一套|
+|`bg fit cover\|contain\|tile`|背景铺法|
+|`deco border width N` / `color #RRGGBB` / `radius N`|全局边框|
+|`deco shadow on\|off\|strength N`|全局阴影|
+|`deco inactive-opacity A`|非焦点窗口统一透明度|
+
+主题是 token 集合（背景、边框、Dock、文字、强调色、透明度）；取色由用户手动选或主题包声明，不做自动取色。
+
+#### query —— 查询
+
+`query focused` / `windows` / `workspaces` / `outputs` / `layout` / `pending`
+
+输出结构化值，可直接参与判断（`if query focused.app_id == "kitty"`）。
+
+#### 控制
+
+|命令|语义|
+|--|--|
+|`quit`|退出合成器|
+|`reload`|重载配置与布局|
+|`log <level> <msg>`|写日志|
+
+#### `@persist`
+
+**默认所有改动只活在当前会话**，重启回落到配置文件。`@persist` 是一个身份：
+
+```text
+@persist
+  dock position left
+  dock opacity 0.85
+  theme mode dark
+@persist!
+```
+
+- 只在当前层生效；块内命令依次执行。
+- 块结束后**一次性**合并写回主配置（原子写 + 快照），不是每条命令写一次。
+- 只写可持久化的键：`dock.*`、`theme.*`、`bg.*`、`deco.*`、`layout.gap*`、`layout.rule.*`、工作区命名。
+- 瞬时状态（焦点、窗口位置、单窗透明度）不写回。
+- 块内任何一条命令失败 → 整块不写回，报 `E2xx`。
+
 ### 尚未实现
 
-- `internal` / `launch` / `reveal` / `open` 命令：等合成器与 IPC 就绪。
-- `@no-error-output` 及其索引集合：语法与预扫描设计见交接文档 §5.6，实现排在 IPC 之后。
+- `win` / `pz` / `ws` / `out` / `layout` / `dock` / `theme` / `bg` / `deco` / `query` 全部命令：等合成器与 IPC。
+- `@persist`：依赖配置服务。
+- `@no-error-output` 及其索引集合：语法与预扫描设计见交接文档 §5.6。
 - `cdc` 目前没有 IPC 客户端：所有命令本地执行。
 
 ## 配置系统契约
@@ -431,6 +642,27 @@ slint 的 winit 后端只能出 `xdg_toplevel`，做不了 layer-shell。软件�
 |S4|`toml_edit` 只改目标键|改一个键 `git diff` 只有 1 行；往返幂等|整文件重写 + 注释锚点；或改 KDL|
 |S5|IPC 独立线程是否卡帧|忙时 1000 条 `apply`，主循环单帧 \< 16ms|改 io_uring / 非阻塞状态机（成本高）|
 
+### D13 白板 = 严格不重叠的自动拼图
+
+不是列式（Niri）也不是主栈（dwm）：窗口是画布上的矩形块，自动装箱、不重叠，放不下就拒绝并提示。理由：与 3×3 画布 + PZ 的设计同源，且「位置由用户决定」比「由算法决定」更符合项目定位。代价：需要装箱算法与 pending 机制，`win move` 的语义变成「平移或交换」而不是「换列」。
+
+### D14 装饰：默认无标题栏，单应用可切 CSD / SSD
+
+默认不给标题栏（Niri 风格），焦点靠边框区分；需要标题栏的应用可以按应用或用 `win decorate` 临时切到 CSD / SSD。理由：全局统一画 SSD 要为每个窗口维护按钮与拖拽状态；纯 CSD 又会让风格散掉。代价：`xdg-decoration` 协商要处理「客户端坚持 CSD」的降级。
+
+### D15 默认不持久化，`@persist` 身份才写回
+
+cdc 改的是会话状态，重启回落到配置文件。只有 `@persist` 作用域内的命令，在块成功结束后**一次性**合并写回主配置。理由：按键脚本高频改盘会不断触发快照与热重载；显式标记让「哪些改动会留下」可读可控。代价：用户容易忘记加 `@persist`，需要在文档与 `--verbose` 里提示。
+
+### D16 测试形态：嵌套窗口优先，TTY 只做验证
+
+- **默认开发自测**：`chaos-compositor --nested`（Smithay winit 后端），跑在 KDE 的一个窗口里。DRM/KMS 完全没被接管，合成器崩溃只死那个窗口。
+- **CI / 回归**：`--headless`（pixman / renderer_test），跑协议与渲染快照，不需要显示服务器。
+- **TTY / DRM**：只在里程碑验证，且必须带看门狗——启动后若 60s 内无输入、或无健康心跳，自动退出并 `chvt` 回原 VT。
+- **跨进程预览**：需要 `ext-image-copy-capture`（或旧版 `wlr-screencopy`）由客户端主动拉画面；这类工具（Noctalia 的桌面窗口就是）只能看、不能保命，不放进核心路径，阶段 6 之后再考虑。
+
+理由：预览客户端寄生在同一个合成器上，合成器一崩它一起没；嵌套后端才是真正的崩溃域隔离。代价：嵌套模式下输入要经过外层合成器转发，测不到 libinput/DRM 路径，所以 DRM 验证不能省。
+
 ## 实施计划
 
 估算口径：单人、业余每周 15 小时。给区间，不给假精度。
@@ -442,7 +674,7 @@ slint 的 winit 后端只能出 `xdg_toplevel`，做不了 layer-shell。软件�
 |阶段|内容|出口标准|周|
 |--|--|----|-|
 |0 地基|`chaos-path` / `cdc-parser` / `chaos-config` / `chaos-ipc` / `cdc` CLI / 设置应用最小版|在 KDE 里可用 `cdc validate` 与设置应用；零图形依赖；全链路有测试|4–5|
-|1 合成器|winit + udev 双后端、DRM/GBM/EGL、libinput、xdg-shell、activation|TTY 下跑 kitty 能打字能退出；udev 与 winit 共用同一 `State`|5–6|
+|1 合成器|`--nested`（winit，默认开发形态）+ `--headless`（CI）+ udev/DRM、libinput、xdg-shell、activation|嵌套窗口里跑 kitty 能打字能退出；`--headless` 能出帧；TTY 带看门狗验证|5–6|
 |2 平铺|`LayoutEngine`、configure 回路、焦点/移动、layer-shell + popup|10 窗口不闪烁；waybar 可挂且独占区生效|4|
 |3 配置接入|在线配置服务、热重载、快照回退、systemd 托管|坏配置连续失败两次 → 自动进恢复模式|2–3|
 |4 in-shell|`chaos-settings --in-shell` 子进程|`kill -9` 面板不影响合成器；禁用后面板功能对等|2|
@@ -500,7 +732,7 @@ slint 的 winit 后端只能出 `xdg_toplevel`，做不了 layer-shell。软件�
 
 交接文档已定稿语义，下列 16 处是写代码当天就会撞上的空白。**每条都已选定默认值并据此实现**；要改先改本节。
 
-状态：`已定` = 已经拍板（含 D12）；`默认` = 按下方取值实现，有异议再改。
+状态：`已定` = 已经拍板（含 D12–D15）；`默认` = 按下方取值实现，有异议再改。
 
 |ID|缺口|取值|状态|
 |--|--|--|--|
@@ -538,6 +770,28 @@ slint 的 winit 后端只能出 `xdg_toplevel`，做不了 layer-shell。软件�
 - **G1 多输出**：若将来要「工作区跨输出连续」，只需改工作区归属与 PZ 作用域，布局 trait 签名预留了 `outputs: &[OutputGeom]`。
 - **G3 索引基准**：若改成「不含指令自身」，改动集中在预扫描的位置映射，执行器不受影响。
 
+### G17 拼图装箱的细节（默认值）
+
+|问题|默认取值|
+|--|----|
+|新窗口放不下|先按 preferred size 找，失败缩到 min_size 再找，仍失败进 pending，不 map|
+|pending 生命周期|布局每次变动自动重试一次；也可 `win retry` 手动重试；会话结束丢弃|
+|落点顺序|当前局部视口内由左上开始扫描，其次按距离向外扩|
+|move 无空隙|与目标方向最近邻交换，不推挤整行|
+|resize 压到邻窗|拒绝并提示，不自动推挤|
+|float 退出时放不下|回到 pending，提示用户腾位置|
+|同尺寸多空隙|取距离视口中心最近的一个，保证可预测|
+
+### G18 嵌套模式的验收标准（默认值）
+
+|问题|默认取值|
+|--|----|
+|嵌套窗口尺寸|默认 1280×800，可 `--nested-size WxH`|
+|缩放|嵌套窗口内按 1:1 逻辑像素渲染，不做 DPI 适配|
+|输入|全键盘 + 指针；`Mod+Esc` 无条件退出|
+|崩溃|panic hook 落日志，进程退出，外层窗口关闭，不残留子进程|
+|看门狗|60s 无输入 / 无帧 → 退出（仅 TTY 模式启用）|
+
 ## 工程规范
 
 ### 环境
@@ -560,9 +814,9 @@ CARGO_HOME="$PWD/target/cargo-home" \
 
 ### 文档规范
 
-- **只改 `docs/src/*.md`**，`README.md` 与 `docs/design.md` 是生成物，带 `DO NOT EDIT` 头。
+- **`docs/design.md` 是生成物**：只改 `docs/src/*.md`，再跑 `cargo onedoc`；生成物带 `DO NOT EDIT` 头。
 - 文档按「是什么 / 契约 / 决策 / 计划 / 缺口 / 工程」分层，一件事只写在一个文件里。
-- README 只保留：定位、状态、硬约束、文档指针、构建命令。技术内容一律进 design。
+- `README.md` 手写，只讲定位与特性；技术内容、约束、命令、排期一律进 design，不要往 README 里搬。
 - 新增配置项、诊断码、决策：先改文档，再写代码，同一 PR。
 - 交接文档 `docs/handover-v0.1.md` 是归档，不参与生成，也不追改。
 
@@ -604,8 +858,31 @@ cargo test --workspace
 - 不主动 commit / push，除非明确要求。
 - 破坏性依赖升级单独成 PR，并在 `docs/src/05-decisions.md` 记一笔。
 
+### 测试形态（按危险度递增）
+
+1. **`--nested`（默认）**：合成器跑在 KDE 窗口里，崩溃只死窗口。日常开发 100% 走这条。
+1. **`--headless`（CI）**：无显示服务器，跑协议与渲染快照。
+1. **TTY / DRM（里程碑）**：唯一能测到 libinput、KMS、VT 切换的路径，也是最容易把机器锁死的一条。
+
 ### TTY 测试守则
 
-1. 进 TTY 前确认 SSH 可用或已开第二个 TTY（`Ctrl+Alt+F2`）。
+1. 进 TTY 前确认 SSH 可用，或已开第二个 TTY（`Ctrl+Alt+F2`）。
+
+1. 用**看门狗启动**，不要直接跑裸二进制：
+   
+   ```sh
+   timeout 60 ./target/debug/chaos-compositor || chvt 1
+   ```
+   
+   合成器内部也实现同一套：60s 无输入 / 无健康心跳 → 自行退出并 `chvt` 回原 VT。
+
 1. 准备救回脚本：`chvt 1`、`pkill -f chaos-compositor`。
+
 1. 首次只跑只读模式（不接管 DRM），确认日志正常再逐步放开。
+
+1. 合成器启动前把当前 VT 号记下来，恢复时切回去，而不是假定是 1。
+
+### 预览与截图
+
+- 内置 PZ 全景由合成器自己渲染，不需要协议。
+- 跨进程预览（把桌面显示在另一个窗口里，类似 Noctalia 的桌面窗口）需要 `ext-image-copy-capture`；它是**观察工具**，不提供崩溃隔离，排在阶段 6 之后。

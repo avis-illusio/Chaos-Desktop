@@ -1,20 +1,15 @@
-# cargo-onedoc：Markdown 一律由 docs/src/ 合成，禁止直接编辑生成物。
+# cargo-onedoc：只生成 docs/design.md。
 #
-#   cargo onedoc                  重新生成 README.md 与 docs/design.md
+#   cargo onedoc                  重新生成 docs/design.md
 #   cargo onedoc --check          CI 校验生成物是否过期
 #
-# 拆分原则：README 只放「是什么 / 怎么跑 / 去哪看」，技术细节全部进 design.md。
+# README.md 是手写的，不进这里：它只讲「是什么、有什么特性」，
+# 技术细节、决策、排期、契约一律进 design.md。
 
 [[doc]]
 input = [
     "docs/src/00-summary.md",
     "docs/src/01-quickstart.md",
-]
-output = "README.md"
-template = "docs/templates/readme.md"
-
-[[doc]]
-input = [
     "docs/src/10-workspace.md",
     "docs/src/11-architecture.md",
     "docs/src/12-cdc.md",

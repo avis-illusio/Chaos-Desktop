@@ -40,13 +40,13 @@ CARGO_HOME="$PWD/target/cargo-home" \
 ## CI 门禁
 
 ```sh
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
-./target/onedoc-tool/bin/cargo-onedoc onedoc --check
+cargo onedoc --check
 ```
 
-只跑 Linux。`cargo deny` 检查许可证与安全公告。
+同一组命令跑在 `.github/workflows/ci.yml`（push 到 `main` 与所有 PR）；工具链由 `rust-toolchain.toml` 锁死 `1.99.0`，CI 会按它安装，不用额外传版本。只跑 Linux。`cargo deny` 检查许可证与安全公告。
 
 ## 红线
 

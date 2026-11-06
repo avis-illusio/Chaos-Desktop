@@ -1,0 +1,6 @@
+[toolchain]
+# 精确锁定，保证本地与 CI 编出同一个东西。
+# 升级时单独一个 PR，并同步改 docs/src/01-quickstart.md 里的版本号。
+channel = "1.99.0"
+profile = "minimal"
+components = ["rustfmt", "clippy"]

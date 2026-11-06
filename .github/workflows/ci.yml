@@ -1,0 +1,54 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  gates:
+    name: fmt / clippy / test / docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装固定工具链
+        # 版本号来自 rust-toolchain.toml，这里显式装一遍以便启用缓存。
+        run: rustup toolchain install 1.99.0 --profile minimal --component rustfmt,clippy
+
+      - name: 缓存 cargo 与构建产物
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: 格式
+        run: cargo fmt --all --check
+
+      - name: Lint
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: 测试
+        run: cargo test --workspace
+
+      - name: 安装 cargo-onedoc
+        run: |
+          if ! command -v cargo-onedoc >/dev/null 2>&1; then
+            cargo install cargo-onedoc --version 0.3.2 --locked
+          fi
+
+      - name: 文档是否过期
+        run: cargo onedoc --check

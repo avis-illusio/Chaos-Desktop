@@ -46,20 +46,20 @@ pub mod codes {
     pub const UNKNOWN_COMMAND: &str = "E003";
     pub const MISSING_ARGUMENT: &str = "E004";
     pub const IDENTITY_SYNTAX: &str = "E005";
-    pub const CONTINUE_UNLOAD: &str = "E006";
     pub const LEADING_INDENT: &str = "E007";
     pub const UNKNOWN_IDENTITY: &str = "E008";
+    pub const REGEX_INVALID: &str = "E009";
+    pub const SCOPE_SYNTAX: &str = "E010";
+    pub const SCOPE_RANGE: &str = "E011";
     // 路径 / 存在性
     pub const BAD_PATH: &str = "E101";
     // 执行
     pub const SPAWN_FAILED: &str = "E201";
     pub const NON_ZERO_EXIT: &str = "E202";
     // 警告
-    pub const EMPTY_UNLOAD: &str = "W001";
-    pub const UNCLOSED_IDENTITY: &str = "W002";
-    pub const UNLOAD_INHERITED: &str = "W003";
     pub const CONTINUE_EMPTY: &str = "W004";
     pub const SKIPPED_UNSAFE: &str = "W005";
+    pub const SCOPE_NO_MATCH: &str = "W006";
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,12 +106,32 @@ impl fmt::Display for Diagnostic {
 /// 已定义的身份。未列出的身份名在解析期报 `E008`。
 pub const KNOWN_IDENTITIES: &[&str] = &["continue", "synchronizer"];
 
+/// 身份的作用域，`{…}` 里的写法。位置按执行单元内 1 基计，指令自身算第 1 条。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScopeSpec {
+    /// `{:}` 或不写：指令自身到单元结束。
+    #[default]
+    All,
+    /// `{5}`：单元内第 5 条。
+    Point(i64),
+    /// `{:5}`：指令自身到第 5 条。
+    To(i64),
+    /// `{5:}`：第 5 条到身份注销 / 单元结束。
+    From(i64),
+    /// `{3:7}`：第 3 条到第 7 条（端点无序）。
+    Between(i64, i64),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommandKind {
-    /// `@name` 或 `@name!`
-    Identity { name: String, unload: bool },
-    /// `@continue`
-    Continue,
+    /// `@name` / `@name{scope}{regex}` / `@name!`
+    Identity {
+        name: String,
+        unload: bool,
+        scope: ScopeSpec,
+        /// 正则，匹配语句原文（去掉缩进的整行）。
+        filter: Option<String>,
+    },
     /// `xrun <file>` —— 直接执行一个可执行文件。
     Xrun { arg: String },
     /// `run file <path>` —— 用 `/bin/sh` 执行脚本文件。
@@ -134,7 +154,6 @@ impl CommandKind {
     pub const fn name(&self) -> &'static str {
         match self {
             Self::Identity { .. } => "identity",
-            Self::Continue => "continue",
             Self::Xrun { .. } => "xrun",
             Self::RunFile { .. } => "run-file",
             Self::RunCommand { .. } => "run-command",
@@ -149,6 +168,8 @@ pub struct Command {
     pub id: usize,
     pub span: Span,
     pub kind: CommandKind,
+    /// 去掉缩进后的整行原文，供身份正则筛选使用。
+    pub raw: String,
 }
 
 /// 一个节点 = 一条命令 + 它下面缩进的块（独立执行单元）。

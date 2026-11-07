@@ -1,11 +1,12 @@
 //! `.cdc` 执行器。
 //!
-//! 执行模型：
-//! - 一个块（文件顶层或某个缩进块）= 一个执行单元，身份栈独立初始化。
-//! - 身份命令只影响**当前层**；`@continue` 把调用点父层的身份快照注入 `inherited`。
-//! - `@synchronizer` 生效期间，块内的进程命令并发触发；`@synchronizer!` 之后恢复顺序，
-//!   已在后台的命令不等待（块结束时统一收尾）。
-//! - 安全模式（`--safe`）跳过所有会创建进程的命令（`W005`）。
+//! 身份不再是「栈上的状态」，而是**带作用域的属性**：
+//! `@X{作用域}{正则}` 决定 X 作用在本执行单元的哪些语句上。
+//! 执行前先为每条语句算出它携带的身份集合，再按集合执行。
+//!
+//! - `@continue` 的作用是把「调用点父层的身份快照」注入被它覆盖的语句。
+//! - `@X!` 结束 X 的作用区间（把它之后开始的区间一律截断）。
+//! - `@synchronizer` 覆盖到的语句并发触发。
 
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
@@ -13,7 +14,7 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::thread::Scope;
 
-use cdc_parser::{CommandKind, Diagnostic, Node, Program, Span, codes};
+use cdc_parser::{CommandKind, Diagnostic, Node, Program, ScopeSpec, Span, codes};
 use chaos_path::{PathError, resolve_file};
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -88,36 +89,17 @@ impl Executor {
         parent_scope: &[String],
         scope: &'scope Scope<'scope, '_>,
     ) {
-        let mut frame = Frame::default();
+        let plan = self.plan(nodes, parent_scope);
 
-        for node in nodes {
-            let span = node.command.span;
+        for (i, node) in nodes.iter().enumerate() {
+            let ids = &plan[i];
 
             match &node.command.kind {
-                CommandKind::Identity { name, unload } => {
-                    if *unload {
-                        frame.unload(name, span, self);
-                    } else {
-                        frame.attach(name);
-                    }
-                }
-                CommandKind::Continue => {
-                    if parent_scope.is_empty() {
-                        self.emit(Diagnostic::warning(
-                            codes::CONTINUE_EMPTY,
-                            span,
-                            "`@continue` 的父层没有身份可继承（等同常态启动）",
-                        ));
-                    } else {
-                        // 快照在调用点捕获，且不去重：重复 @continue 会重复叠加。
-                        frame.inherited.extend(parent_scope.iter().cloned());
-                    }
-                }
-                CommandKind::Invalid => {
-                    // 解析已报错，执行前就会被拦下；这里兜底不做事。
-                }
+                // 身份指令本身只贡献属性，执行阶段不做事。
+                CommandKind::Identity { .. } | CommandKind::Invalid => {}
                 kind => {
-                    if frame.synchronized() {
+                    let span = node.command.span;
+                    if ids.iter().any(|s| s == "synchronizer") {
                         // 并发触发：命令在后台跑，主序列不等待。
                         scope.spawn(move || self.exec_spawn(kind, span));
                     } else {
@@ -126,20 +108,94 @@ impl Executor {
                 }
             }
 
-            // 子块是独立执行单元：身份栈重新初始化，只能通过 @continue 继承。
+            // 子块是独立执行单元：只继承「父语句在这一刻携带的身份」。
             if !node.children.is_empty() {
-                let snapshot = frame.effective();
-                self.run_unit(&node.children, &snapshot, scope);
+                self.run_unit(&node.children, ids, scope);
+            }
+        }
+    }
+
+    /// 为执行单元里的每条语句算出它携带的身份集合。
+    fn plan(&self, nodes: &[Node], parent_scope: &[String]) -> Vec<Vec<String>> {
+        let len = nodes.len();
+        let mut plan: Vec<Vec<String>> = vec![Vec::new(); len];
+
+        for (i, node) in nodes.iter().enumerate() {
+            let CommandKind::Identity {
+                name,
+                unload,
+                scope,
+                filter,
+            } = &node.command.kind
+            else {
+                continue;
+            };
+            if *unload {
+                continue; // 注销只用于截断别人的区间
+            }
+
+            let Some((start, end)) = resolve_scope(*scope, i, len) else {
+                self.emit(Diagnostic::error(
+                    codes::SCOPE_RANGE,
+                    node.command.span,
+                    format!("`@{name}` 的作用域超出本执行单元（共 {len} 条语句）"),
+                ));
+                continue;
+            };
+
+            // 同一身份的注销会把后续区间截断。
+            let stop = (i + 1..len)
+                .find(|&j| {
+                    matches!(
+                        &nodes[j].command.kind,
+                        CommandKind::Identity { name: n2, unload: true, .. } if n2 == name
+                    )
+                })
+                .unwrap_or(len);
+            let end = end.min(stop);
+            if start >= end {
+                continue;
+            }
+
+            let regex = filter.as_ref().and_then(|f| regex::Regex::new(f).ok());
+            let mut matched = 0usize;
+            for j in start..end {
+                // 身份指令自身不参与筛选：不能把属性加到一条指令上。
+                if matches!(nodes[j].command.kind, CommandKind::Identity { .. }) {
+                    continue;
+                }
+                if let Some(re) = &regex
+                    && !re.is_match(&nodes[j].command.raw)
+                {
+                    continue;
+                }
+                matched += 1;
+                if name == "continue" {
+                    for id in parent_scope {
+                        push_unique(&mut plan[j], id);
+                    }
+                } else {
+                    push_unique(&mut plan[j], name);
+                }
+            }
+
+            if matched == 0 {
+                self.emit(Diagnostic::warning(
+                    codes::SCOPE_NO_MATCH,
+                    node.command.span,
+                    format!("`@{name}` 的作用域里没有匹配的语句"),
+                ));
+            }
+            if name == "continue" && parent_scope.is_empty() && matched > 0 {
+                self.emit(Diagnostic::warning(
+                    codes::CONTINUE_EMPTY,
+                    node.command.span,
+                    "`@continue` 的父层没有身份可继承（等同常态启动）",
+                ));
             }
         }
 
-        for name in &frame.attached {
-            self.emit(Diagnostic::warning(
-                codes::UNCLOSED_IDENTITY,
-                Span::new(0, 0),
-                format!("身份 `@{name}` 在块结束时仍未卸载，已隐式关闭"),
-            ));
-        }
+        plan
     }
 
     fn exec_spawn(&self, kind: &CommandKind, span: Span) {
@@ -212,47 +268,41 @@ impl Executor {
     }
 }
 
-/// 当前层的身份栈。
-#[derive(Debug, Default)]
-struct Frame {
-    /// 本层自己附加的身份，可卸载。
-    attached: Vec<String>,
-    /// `@continue` 注入的身份，不可卸载。
-    inherited: Vec<String>,
+fn push_unique(list: &mut Vec<String>, id: &str) {
+    if !list.iter().any(|s| s == id) {
+        list.push(id.to_string());
+    }
 }
 
-impl Frame {
-    fn attach(&mut self, name: &str) {
-        self.attached.push(name.to_string());
-    }
-
-    fn unload(&mut self, name: &str, span: Span, ex: &Executor) {
-        if let Some(i) = self.attached.iter().rposition(|n| n == name) {
-            self.attached.remove(i);
-        } else if self.inherited.iter().any(|n| n == name) {
-            ex.emit(Diagnostic::warning(
-                codes::UNLOAD_INHERITED,
-                span,
-                format!("`@{name}` 是 `@continue` 继承来的，不能在本层卸载"),
-            ));
-        } else {
-            ex.emit(Diagnostic::warning(
-                codes::EMPTY_UNLOAD,
-                span,
-                format!("本层没有 `@{name}` 可以卸载（空操作）"),
-            ));
+/// 把 `{…}` 作用域解析成 0 基半开区间 `[start, end)`；越界返回 `None`。
+fn resolve_scope(scope: ScopeSpec, directive: usize, len: usize) -> Option<(usize, usize)> {
+    let pos = |p: i64| -> Option<usize> {
+        let raw = if p > 0 { p } else { len as i64 + p + 1 };
+        if raw < 1 || raw > len as i64 {
+            return None;
         }
-    }
+        Some(raw as usize - 1)
+    };
 
-    fn effective(&self) -> Vec<String> {
-        let mut v = self.attached.clone();
-        v.extend(self.inherited.iter().cloned());
-        v
-    }
-
-    fn synchronized(&self) -> bool {
-        self.attached.iter().any(|n| n == "synchronizer")
-            || self.inherited.iter().any(|n| n == "synchronizer")
+    match scope {
+        ScopeSpec::All => Some((directive, len)),
+        ScopeSpec::Point(p) => {
+            let at = pos(p)?;
+            Some((at, at + 1))
+        }
+        ScopeSpec::To(p) => {
+            let end = pos(p)?;
+            Some((directive, end + 1))
+        }
+        ScopeSpec::From(p) => {
+            let start = pos(p)?;
+            Some((start, len))
+        }
+        ScopeSpec::Between(a, b) => {
+            let (x, y) = (pos(a)?, pos(b)?);
+            let (lo, hi) = if x <= y { (x, y) } else { (y, x) };
+            Some((lo, hi + 1))
+        }
     }
 }
 
@@ -336,4 +386,22 @@ pub fn validate(program: &Program) -> Vec<Diagnostic> {
         }
     });
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scope_resolution() {
+        // 单元有 5 条语句，指令在 0 号位。
+        assert_eq!(resolve_scope(ScopeSpec::All, 0, 5), Some((0, 5)));
+        assert_eq!(resolve_scope(ScopeSpec::Point(3), 0, 5), Some((2, 3)));
+        assert_eq!(resolve_scope(ScopeSpec::To(3), 0, 5), Some((0, 3)));
+        assert_eq!(resolve_scope(ScopeSpec::From(3), 0, 5), Some((2, 5)));
+        assert_eq!(resolve_scope(ScopeSpec::Between(4, 2), 0, 5), Some((1, 4)));
+        assert_eq!(resolve_scope(ScopeSpec::Point(-1), 0, 5), Some((4, 5)));
+        assert_eq!(resolve_scope(ScopeSpec::Point(9), 0, 5), None);
+        assert_eq!(resolve_scope(ScopeSpec::From(-9), 0, 5), None);
+    }
 }

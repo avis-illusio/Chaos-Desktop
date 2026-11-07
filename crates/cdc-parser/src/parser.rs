@@ -142,105 +142,52 @@ fn parse_block(
 fn parse_command(line: &Line, id: usize, diagnostics: &mut Vec<Diagnostic>) -> Command {
     let text = line.content.as_str();
     let span = line.span();
-    let invalid = |diagnostics: &mut Vec<Diagnostic>, code: &'static str, msg: &str| {
-        diagnostics.push(Diagnostic::error(code, span, msg));
-        Command {
-            id,
-            span,
-            kind: CommandKind::Invalid,
-        }
-    };
+    let kind = parse_kind(text, span, diagnostics);
+    Command {
+        id,
+        span,
+        kind,
+        raw: text.to_string(),
+    }
+}
 
+fn parse_kind(text: &str, span: Span, diagnostics: &mut Vec<Diagnostic>) -> CommandKind {
     if let Some(rest) = text.strip_prefix('@') {
-        if rest == "continue" {
-            return Command {
-                id,
-                span,
-                kind: CommandKind::Continue,
-            };
-        }
-
-        let (name, unload) = match rest.strip_suffix('!') {
-            Some(n) => (n, true),
-            None => (rest, false),
-        };
-
-        if unload && name == "continue" {
-            return invalid(
-                diagnostics,
-                codes::CONTINUE_UNLOAD,
-                "`@continue!` 没有意义：继承来的身份不能卸载",
-            );
-        }
-        if name.is_empty() || name.contains(char::is_whitespace) {
-            return invalid(
-                diagnostics,
-                codes::IDENTITY_SYNTAX,
-                "身份写法必须是 `@name` 或 `@name!`，且一行只能有一个",
-            );
-        }
-        if !name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-        {
-            return invalid(
-                diagnostics,
-                codes::IDENTITY_SYNTAX,
-                "身份名只能包含字母、数字、`_`、`-`",
-            );
-        }
-        if !KNOWN_IDENTITIES.contains(&name) {
-            let known = KNOWN_IDENTITIES.join("`, `@");
-            return invalid(
-                diagnostics,
-                codes::UNKNOWN_IDENTITY,
-                &format!("未定义的身份 `@{name}`（当前只有 `@{known}`）"),
-            );
-        }
-
-        return Command {
-            id,
-            span,
-            kind: CommandKind::Identity {
-                name: name.to_string(),
-                unload,
-            },
-        };
+        return parse_identity(rest, span, diagnostics);
     }
 
     if text == "xrun" {
-        return invalid(
-            diagnostics,
+        diagnostics.push(Diagnostic::error(
             codes::MISSING_ARGUMENT,
+            span,
             "`xrun` 需要一个文件路径",
-        );
+        ));
+        return CommandKind::Invalid;
     }
     if let Some(rest) = text.strip_prefix("xrun")
         && rest.starts_with([' ', '\t'])
     {
         let arg = rest.trim();
         if arg.is_empty() {
-            return invalid(
-                diagnostics,
+            diagnostics.push(Diagnostic::error(
                 codes::MISSING_ARGUMENT,
+                span,
                 "`xrun` 需要一个文件路径",
-            );
+            ));
+            return CommandKind::Invalid;
         }
-        return Command {
-            id,
-            span,
-            kind: CommandKind::Xrun {
-                arg: arg.to_string(),
-            },
+        return CommandKind::Xrun {
+            arg: arg.to_string(),
         };
     }
 
     if text == "run" {
-        return invalid(
-            diagnostics,
+        diagnostics.push(Diagnostic::error(
             codes::MISSING_ARGUMENT,
+            span,
             "`run` 需要 `file` 或 `command`",
-        );
+        ));
+        return CommandKind::Invalid;
     }
     if let Some(rest) = text.strip_prefix("run")
         && rest.starts_with([' ', '\t'])
@@ -251,43 +198,199 @@ fn parse_command(line: &Line, id: usize, diagnostics: &mut Vec<Diagnostic>) -> C
             None => (rest, ""),
         };
         return match keyword {
-            "file" if !tail.is_empty() => Command {
-                id,
-                span,
-                kind: CommandKind::RunFile {
-                    arg: tail.to_string(),
-                },
+            "file" if !tail.is_empty() => CommandKind::RunFile {
+                arg: tail.to_string(),
             },
-            "command" if !tail.is_empty() => Command {
-                id,
-                span,
-                kind: CommandKind::RunCommand {
-                    arg: tail.to_string(),
-                },
+            "command" if !tail.is_empty() => CommandKind::RunCommand {
+                arg: tail.to_string(),
             },
-            "file" | "command" => invalid(
-                diagnostics,
-                codes::MISSING_ARGUMENT,
-                "`run file` / `run command` 需要一个参数",
-            ),
-            _ => unknown_command(diagnostics, span, id),
+            "file" | "command" => {
+                diagnostics.push(Diagnostic::error(
+                    codes::MISSING_ARGUMENT,
+                    span,
+                    "`run file` / `run command` 需要一个参数",
+                ));
+                CommandKind::Invalid
+            }
+            _ => unknown_command(diagnostics, span),
         };
     }
 
-    unknown_command(diagnostics, span, id)
+    unknown_command(diagnostics, span)
 }
 
-fn unknown_command(diagnostics: &mut Vec<Diagnostic>, span: Span, id: usize) -> Command {
+fn parse_identity(rest: &str, span: Span, diagnostics: &mut Vec<Diagnostic>) -> CommandKind {
+    let (body, unload) = match rest.strip_suffix('!') {
+        Some(b) => (b, true),
+        None => (rest, false),
+    };
+
+    let name_end = body.find('{').unwrap_or(body.len());
+    let name = &body[..name_end];
+    let mut tail = &body[name_end..];
+
+    let mut groups: Vec<&str> = Vec::new();
+    while let Some(r) = tail.strip_prefix('{') {
+        let Some(close) = r.find('}') else {
+            diagnostics.push(Diagnostic::error(
+                codes::SCOPE_SYNTAX,
+                span,
+                "`{` 没有配对的 `}`",
+            ));
+            return CommandKind::Invalid;
+        };
+        groups.push(&r[..close]);
+        tail = &r[close + 1..];
+    }
+    if !tail.trim().is_empty() {
+        diagnostics.push(Diagnostic::error(
+            codes::IDENTITY_SYNTAX,
+            span,
+            "身份后面只能跟 `{作用域}{正则}` 或 `!`",
+        ));
+        return CommandKind::Invalid;
+    }
+    if groups.len() > 2 {
+        diagnostics.push(Diagnostic::error(
+            codes::SCOPE_SYNTAX,
+            span,
+            "身份最多只能有两个 `{…}`：先作用域、后正则",
+        ));
+        return CommandKind::Invalid;
+    }
+
+    let mut scope = ScopeSpec::All;
+    let mut filter: Option<String> = None;
+    match groups.as_slice() {
+        [] => {}
+        [g] if looks_like_scope(g) => match parse_scope(g) {
+            Ok(s) => scope = s,
+            Err(()) => {
+                diagnostics.push(Diagnostic::error(
+                    codes::SCOPE_SYNTAX,
+                    span,
+                    format!("作用域 `{{{g}}}` 写法不对"),
+                ));
+                return CommandKind::Invalid;
+            }
+        },
+        [g] => filter = Some((*g).to_string()),
+        [g0, g1] => {
+            if !looks_like_scope(g0) {
+                diagnostics.push(Diagnostic::error(
+                    codes::SCOPE_SYNTAX,
+                    span,
+                    format!("第一个 `{{{g0}}}` 应该是作用域"),
+                ));
+                return CommandKind::Invalid;
+            }
+            match parse_scope(g0) {
+                Ok(s) => scope = s,
+                Err(()) => {
+                    diagnostics.push(Diagnostic::error(
+                        codes::SCOPE_SYNTAX,
+                        span,
+                        format!("作用域 `{{{g0}}}` 写法不对"),
+                    ));
+                    return CommandKind::Invalid;
+                }
+            }
+            filter = Some((*g1).to_string());
+        }
+        _ => unreachable!(),
+    }
+
+    if name.is_empty() || name.contains(char::is_whitespace) {
+        diagnostics.push(Diagnostic::error(
+            codes::IDENTITY_SYNTAX,
+            span,
+            "身份写法必须是 `@name`、`@name{…}` 或 `@name!`，且一行只能有一个",
+        ));
+        return CommandKind::Invalid;
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        diagnostics.push(Diagnostic::error(
+            codes::IDENTITY_SYNTAX,
+            span,
+            "身份名只能包含字母、数字、`_`、`-`",
+        ));
+        return CommandKind::Invalid;
+    }
+    if !KNOWN_IDENTITIES.contains(&name) {
+        let known = KNOWN_IDENTITIES.join("`, `@");
+        diagnostics.push(Diagnostic::error(
+            codes::UNKNOWN_IDENTITY,
+            span,
+            format!("未定义的身份 `@{name}`（当前只有 `@{known}`）"),
+        ));
+        return CommandKind::Invalid;
+    }
+
+    if let Some(f) = &filter
+        && let Err(err) = regex::Regex::new(f)
+    {
+        diagnostics.push(Diagnostic::error(
+            codes::REGEX_INVALID,
+            span,
+            format!("正则 `{f}` 无法编译：{err}"),
+        ));
+        return CommandKind::Invalid;
+    }
+
+    CommandKind::Identity {
+        name: name.to_string(),
+        unload,
+        scope,
+        filter,
+    }
+}
+
+fn looks_like_scope(g: &str) -> bool {
+    let t = g.trim();
+    if !t
+        .chars()
+        .all(|c| c.is_ascii_digit() || matches!(c, '-' | ':' | ',' | '*' | ' '))
+    {
+        return false;
+    }
+    t.contains([':', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'])
+}
+
+fn parse_scope(g: &str) -> Result<ScopeSpec, ()> {
+    fn num(s: &str) -> Result<i64, ()> {
+        let t = s.trim();
+        if t.is_empty() || t.contains('*') || t.contains(',') {
+            return Err(());
+        }
+        t.parse::<i64>().map_err(|_| ())
+    }
+
+    let t = g.trim();
+    if t.is_empty() || t == ":" {
+        return Ok(ScopeSpec::All);
+    }
+    if let Some(rest) = t.strip_prefix(':') {
+        return Ok(ScopeSpec::To(num(rest)?));
+    }
+    if let Some(rest) = t.strip_suffix(':') {
+        return Ok(ScopeSpec::From(num(rest)?));
+    }
+    if let Some((a, b)) = t.split_once(':') {
+        return Ok(ScopeSpec::Between(num(a)?, num(b)?));
+    }
+    Ok(ScopeSpec::Point(num(t)?))
+}
+
+fn unknown_command(diagnostics: &mut Vec<Diagnostic>, span: Span) -> CommandKind {
     diagnostics.push(Diagnostic::error(
         codes::UNKNOWN_COMMAND,
         span,
-        "未知命令。当前支持：`@name` / `@name!` / `@continue` / `xrun <文件>` / `run file <脚本>` / `run command <命令>`",
+        "未知命令。当前支持：`@name` / `@name{…}` / `@name!` / `xrun <文件>` / `run file <脚本>` / `run command <命令>`",
     ));
-    Command {
-        id,
-        span,
-        kind: CommandKind::Invalid,
-    }
+    CommandKind::Invalid
 }
 
 #[cfg(test)]
@@ -347,14 +450,18 @@ mod tests {
             p.program.nodes[0].command.kind,
             CommandKind::Identity {
                 name: "synchronizer".into(),
-                unload: false
+                unload: false,
+                scope: ScopeSpec::All,
+                filter: None,
             }
         );
         assert_eq!(
             p.program.nodes[1].command.kind,
             CommandKind::Identity {
                 name: "synchronizer".into(),
-                unload: true
+                unload: true,
+                scope: ScopeSpec::All,
+                filter: None,
             }
         );
     }
@@ -362,7 +469,15 @@ mod tests {
     #[test]
     fn continue_is_a_command() {
         let p = ok("@continue\n");
-        assert_eq!(p.program.nodes[0].command.kind, CommandKind::Continue);
+        assert_eq!(
+            p.program.nodes[0].command.kind,
+            CommandKind::Identity {
+                name: "continue".into(),
+                unload: false,
+                scope: ScopeSpec::All,
+                filter: None,
+            }
+        );
     }
 
     #[test]
@@ -444,8 +559,66 @@ mod tests {
     fn identity_syntax_is_checked() {
         assert_eq!(err_codes("@A @B\n"), vec![codes::IDENTITY_SYNTAX]);
         assert_eq!(err_codes("@\n"), vec![codes::IDENTITY_SYNTAX]);
-        assert_eq!(err_codes("@continue!\n"), vec![codes::CONTINUE_UNLOAD]);
+        assert_eq!(err_codes("@continue!\n"), Vec::<&str>::new());
         assert_eq!(err_codes("@nope\n"), vec![codes::UNKNOWN_IDENTITY]);
+    }
+
+    #[test]
+    fn scoped_identity_parses() {
+        let p = ok("@continue{:}{xrun}\nxrun /bin/true\nrun command echo hi\n");
+        assert_eq!(
+            p.program.nodes[0].command.kind,
+            CommandKind::Identity {
+                name: "continue".into(),
+                unload: false,
+                scope: ScopeSpec::All,
+                filter: Some("xrun".into()),
+            }
+        );
+    }
+
+    #[test]
+    fn scope_shapes() {
+        let cases = [
+            ("@synchronizer{:5}", ScopeSpec::To(5)),
+            ("@synchronizer{5:}", ScopeSpec::From(5)),
+            ("@synchronizer{3:7}", ScopeSpec::Between(3, 7)),
+            ("@synchronizer{5}", ScopeSpec::Point(5)),
+            ("@synchronizer{:}", ScopeSpec::All),
+        ];
+        for (src, want) in cases {
+            let p = ok(&format!("{src}\n"));
+            assert_eq!(
+                p.program.nodes[0].command.kind,
+                CommandKind::Identity {
+                    name: "synchronizer".into(),
+                    unload: false,
+                    scope: want,
+                    filter: None,
+                },
+                "{src}"
+            );
+        }
+    }
+
+    #[test]
+    fn bad_regex_and_scope_are_errors() {
+        assert_eq!(
+            err_codes("@synchronizer{:}{[}\n"),
+            vec![codes::REGEX_INVALID]
+        );
+        assert_eq!(
+            err_codes("@synchronizer{1:2:3}\n"),
+            vec![codes::SCOPE_SYNTAX]
+        );
+        assert_eq!(
+            err_codes("@synchronizer{:}{(}\n"),
+            vec![codes::REGEX_INVALID]
+        );
+        assert_eq!(
+            err_codes("@synchronizer{a}{b}{c}\n"),
+            vec![codes::SCOPE_SYNTAX]
+        );
     }
 
     #[test]
@@ -453,7 +626,15 @@ mod tests {
         assert!(CommandKind::Xrun { arg: String::new() }.spawns_process());
         assert!(CommandKind::RunFile { arg: String::new() }.spawns_process());
         assert!(CommandKind::RunCommand { arg: String::new() }.spawns_process());
-        assert!(!CommandKind::Continue.spawns_process());
+        assert!(
+            !CommandKind::Identity {
+                name: "continue".into(),
+                unload: false,
+                scope: ScopeSpec::All,
+                filter: None,
+            }
+            .spawns_process()
+        );
         assert!(!CommandKind::Invalid.spawns_process());
     }
 }

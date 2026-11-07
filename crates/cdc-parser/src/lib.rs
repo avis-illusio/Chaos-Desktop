@@ -6,5 +6,7 @@
 pub mod ast;
 pub mod parser;
 
-pub use ast::{Command, CommandKind, Diagnostic, Node, Parsed, Program, Severity, Span, codes};
+pub use ast::{
+    Command, CommandKind, Diagnostic, Node, Parsed, Program, ScopeSpec, Severity, Span, codes,
+};
 pub use parser::parse;

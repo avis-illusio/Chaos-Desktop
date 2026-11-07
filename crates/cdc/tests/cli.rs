@@ -251,3 +251,42 @@ fn usage_error_when_no_file() {
 fn assert_exists(p: &Path) {
     assert!(p.exists(), "{} 不存在", p.display());
 }
+
+#[test]
+fn scope_out_of_range_is_a_runtime_error() {
+    let sb = Sandbox::new("scope-range");
+    let f = sb.file("a.cdc", "run command true\n@synchronizer{99}\n");
+    let out = sb.cdc(&[f.to_str().unwrap()]);
+    assert_eq!(code(&out), 1);
+    assert!(stderr(&out).contains("E011"), "stderr: {}", stderr(&out));
+}
+
+#[test]
+fn filter_that_matches_nothing_warns_only() {
+    let sb = Sandbox::new("scope-nomatch");
+    let f = sb.file(
+        "a.cdc",
+        "@synchronizer{:}{no-such-command}\nrun command true\n",
+    );
+    let out = sb.cdc(&[f.to_str().unwrap()]);
+    assert_eq!(code(&out), 0, "stderr: {}", stderr(&out));
+    assert!(stderr(&out).contains("W006"), "stderr: {}", stderr(&out));
+}
+
+#[test]
+fn scoped_filter_only_covers_matching_lines() {
+    let sb = Sandbox::new("scope-filter");
+    let a = sb.path("scoped");
+    let b = sb.path("unscoped");
+    let f = sb.file(
+        "a.cdc",
+        &format!(
+            "@synchronizer{{:}}{{scoped}}\nrun command touch {}\nrun command touch {}\n",
+            a.display(),
+            b.display()
+        ),
+    );
+    let out = sb.cdc(&[f.to_str().unwrap()]);
+    assert_eq!(code(&out), 0, "stderr: {}", stderr(&out));
+    assert!(a.exists() && b.exists(), "两条命令都要执行");
+}

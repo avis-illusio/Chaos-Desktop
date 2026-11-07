@@ -60,20 +60,37 @@ struct Origin {
 
 | 键 | 类型 | 等级 |
 |---|---|---|
-| `output.<name>.scale` | 1.0–3.0 | requires_restart |
+| `canvas.size` | 倍数（默认 3× 输出逻辑尺寸） | requires_restart |
+| `canvas.pan.mouse` | `mod-drag` / `edge` | safe |
+| `canvas.pan.trackpad_fingers` | 2–4（默认 3） | requires_restart |
+| `canvas.link_max` | u32（默认 2） | requires_restart |
 | `layout.gap_inner` / `layout.gap_outer` | u32 px | safe |
-| `layout.engine` | enum | requires_restart |
+| `layout.rule.<name>` | `app_id` / `ws` / `float` / `deco` / `opacity` | safe |
 | `keybinds.<key>` | `.cdc` 路径 | requires_restart |
-| `pz.zoom` | 3.0 | safe |
 | `pz.animation_ms` | u32 | safe |
-| `pz.center` | `pointer` / `screen` | safe |
+| `pz.minimap` | bool（悬停 `[PZ]` 出小地图） | safe |
+| `pz.land_on_click` | bool | safe |
+| `dock.mode` | `always` / `auto` / `intellihide` / `hidden` | safe |
+| `dock.position` | `bottom` / `top` / `left` / `right` | safe |
+| `dock.opacity` | 0.0–1.0 | safe |
+| `dock.size` | u32 px | safe |
+| `dock.slot.<component>` | `start` / `center` / `end` + order | safe |
+| `dock.components` | 组件列表 | safe |
+| `theme.active` | 主题名 | safe |
+| `theme.mode` | `light` / `dark` / `auto` | safe |
+| `bg.source` | 颜色 / 图片 / 渐变 | safe |
+| `bg.fit` | `cover` / `contain` / `tile` | safe |
+| `deco.border_width` / `deco.border_color` / `deco.radius` | u32 / 颜色 / u32 | safe |
+| `deco.shadow` | `on` / `off` / 强度 | safe |
+| `deco.inactive_opacity` | 0.0–1.0 | safe |
 | `shell.enabled` | bool | requires_restart |
-| `shell.dock.height` / `shell.dock.position` | u32 / enum | safe |
 | `shell.in_shell_panel` | bool | requires_restart |
 | `safety.mode` | bool | safe |
 | `safety.allowed_general_keys` | list | safe |
 | `paths.actions_dir` | 目录 | safe |
 | `schema_version` | u32 | — |
+
+窗口的瞬时状态（位置、焦点、单窗透明度、链接关系）**不进配置文件**，只存在于会话；要持久化的是画布与布局规则。
 
 新增配置项必须先改本节，再写代码。
 

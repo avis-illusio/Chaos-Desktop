@@ -13,7 +13,7 @@ chaos-desktop/
 │  ├─ cdc/                 # ✅ cdc 可执行文件（执行器 + CLI）
 │  ├─ chaos-ipc/           # ⬜ 线协议与客户端/服务端
 │  ├─ chaos-config/        # ⬜ 配置值模型、合并、来源追踪、校验、快照
-│  ├─ chaos-layout/        # ⬜ LayoutEngine trait 与纯几何实现
+│  ├─ chaos-layout/        # ⬜ 白板装箱与几何（LayoutEngine trait）
 │  ├─ chaos-compositor/    # ⬜ Smithay 合成器（内含配置服务）
 │  ├─ chaos-shell/         # ⬜ Dock / 启动器 / PZ 按钮（slint）
 │  └─ chaos-settings/      # ⬜ 设置应用（同一二进制兼 in-shell 模式）

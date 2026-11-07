@@ -33,7 +33,7 @@
   - [CLI 与退出码](#cli-与退出码)
   - [命令表 v0.2（规划）](#命令表-v02规划)
     - [win —— 窗口](#win--窗口)
-    - [白板模型（拼图）](#白板模型拼图)
+    - [白板模型（有限画布 + 拼图）](#白板模型有限画布--拼图)
     - [pz —— 全景](#pz--全景)
     - [ws / out —— 工作区与输出](#ws--out--工作区与输出)
     - [layout —— 布局](#layout--布局)
@@ -65,9 +65,10 @@
   - [D9 一套 UI 双宿主](#d9-一套-ui-双宿主)
   - [D10 PZ 是渲染期全局变换](#d10-pz-是渲染期全局变换)
   - [D11 进程创建统一走 `chaos-proc`](#d11-进程创建统一走-chaos-proc)
-  - [D12 PZ 几何：局部视野 1/9 ↔ 全景视野 1/1](#d12-pz-几何局部视野-19--全景视野-11)
+  - [D12 PZ = 常规 ↔ 鸟瞰 两态](#d12-pz--常规--鸟瞰-两态)
   - [待验证 spike](#待验证-spike)
-  - [D13 白板 = 严格不重叠的自动拼图](#d13-白板--严格不重叠的自动拼图)
+  - [D13 白板 = 有限画布上的非重叠拼图](#d13-白板--有限画布上的非重叠拼图)
+  - [D17 跨工作区同动（link）](#d17-跨工作区同动link)
   - [D14 装饰：默认无标题栏，单应用可切 CSD / SSD](#d14-装饰默认无标题栏单应用可切-csd--ssd)
   - [D15 默认不持久化，`@persist` 身份才写回](#d15-默认不持久化persist-身份才写回)
   - [D16 测试形态：嵌套窗口优先，TTY 只做验证](#d16-测试形态嵌套窗口优先tty-只做验证)
@@ -82,6 +83,7 @@
   - [仍未收敛、按默认值推进的两处](#仍未收敛按默认值推进的两处)
   - [G17 拼图装箱的细节（默认值）](#g17-拼图装箱的细节默认值)
   - [G18 嵌套模式的验收标准（默认值）](#g18-嵌套模式的验收标准默认值)
+  - [G19 跨工作区同动的语义（默认）](#g19-跨工作区同动的语义默认)
 - [工程规范](#工程规范)
   - [环境](#环境)
   - [文档规范](#文档规范)
@@ -150,7 +152,7 @@ chaos-desktop/
 │  ├─ cdc/                 # ✅ cdc 可执行文件（执行器 + CLI）
 │  ├─ chaos-ipc/           # ⬜ 线协议与客户端/服务端
 │  ├─ chaos-config/        # ⬜ 配置值模型、合并、来源追踪、校验、快照
-│  ├─ chaos-layout/        # ⬜ LayoutEngine trait 与纯几何实现
+│  ├─ chaos-layout/        # ⬜ 白板装箱与几何（LayoutEngine trait）
 │  ├─ chaos-compositor/    # ⬜ Smithay 合成器（内含配置服务）
 │  ├─ chaos-shell/         # ⬜ Dock / 启动器 / PZ 按钮（slint）
 │  └─ chaos-settings/      # ⬜ 设置应用（同一二进制兼 in-shell 模式）
@@ -184,7 +186,7 @@ chaos-layout（纯几何，不依赖 Smithay 类型）
 ```text
 合成器进程（chaos-compositor, Smithay）
 ├─ 配置服务：加载 / 校验 / 快照 / 热重载 / IPC 端点
-├─ 布局引擎：LayoutEngine trait，可插拔
+├─ 布局引擎：白板装箱 + 自由移动（LayoutEngine trait）
 ├─ cdc-parser（进程内）：解析 → 执行计划
 ├─ IPC 服务：独立线程，阻塞 IO + calloop channel 回主循环
 └─ in-shell 面板：独立子进程（崩溃隔离），默认启用、可禁用
@@ -353,10 +355,11 @@ cdc --verbose <file.cdc>     # 打印每条被执行的命令
 |`win focus left\|right\|up\|down`|方向焦点（几何最近邻）|规划|
 |`win focus last`|回到上一个焦点窗口|规划|
 |`win focus --match app_id=…`|按条件选中|规划|
-|`win move left\|right\|up\|down`|该方向有空隙则平移，否则与最近邻交换|规划|
+|`win move left\|right\|up\|down [px]`|步进平移（默认 32px），冲突则拒绝|规划|
+|`win move X Y`|绝对坐标；重叠或越界则拒绝|规划|
+|`win move by DX DY`|相对位移|规划|
 |`win swap --with <match>`|与指定窗口交换两块|规划|
-|`win place X Y`|绝对移动；会重叠则拒绝|规划|
-|`win resize WxH`|绝对尺寸（受 min/max 约束）|规划|
+|`win resize W H`|自由尺寸（受 min_size 约束）|规划|
 |`win resize grow\|shrink [px]`|相对尺寸；只吃空隙，压到邻窗拒绝|规划|
 |`win close`|发 `xdg_toplevel.close`|规划|
 |`win stash`|从画布收起，Dock 留位|规划|
@@ -370,30 +373,33 @@ cdc --verbose <file.cdc>     # 打印每条被执行的命令
 |`win center`|居中到当前视口|规划|
 |`win raise` / `win lower`|层级（float / 叠层用）|规划|
 |`win retry`|重试处于 pending 的窗口|规划|
+|`win link <ws>` / `win unlink`|跨工作区同动 / 解除|规划|
 
-#### 白板模型（拼图）
+#### 白板模型（有限画布 + 拼图）
 
-平铺不是列式也不是主栈，而是**严格不重叠的自动拼图**：
+平铺不是列式，也不是主栈，而是**有限空间上的白板**：
 
-1. **摆放区域** = 当前工作区的 3×3 画布（与 PZ 同源）。
-1. **新窗口**按 `preferred size` 找空隙；找不到就缩到 `min_size` 再找；仍然找不到 → 进入 **pending**。
-1. **pending**：不 map、Dock 显示「待放置」占位、合成器给一次提示。用户调整布局后 `win retry` 重试（布局每次变动也自动重试一次）。
-1. **落点优先级**：当前局部视口内 → 视口外由近及远。
-1. **move**：目标方向有空隙就平移过去；没有空隙就与最近邻交换。
-1. **resize**：只允许吃掉空隙；压到邻窗 → 拒绝并提示（不自动推挤，行为可预测优先）。
-1. **float 是唯一允许重叠的状态**；退出 float 时若放不下，退回 pending。
-1. 网格只用于吸附参考，不是约束：块可以是不规则尺寸。
+1. **画布**：每个工作区一块独立画布，默认 = 输出逻辑尺寸 × 3（面积 9 屏），是**有限空间**，不划分网格。
+1. **节点**：窗口是圆角矩形，可自由移动、自由缩放。约束只有三条——不重叠、不越界、不小于 `min_size`。
+1. **新窗口**：按 `preferred size` 找空隙；失败则缩到 `min_size` 再找；仍失败 → **pending**（不 map、Dock 占位、提示一次）。布局变动自动重试一次，也可 `win retry`。
+1. **落点优先级**：当前视口内 → 视口外由近及远。
+1. **移动**：`win move X Y` 绝对坐标，`win move by DX DY` 相对位移，`win move left|right|up|down [px]` 步进微调；目标冲突直接拒绝，不推挤、不吸附。
+1. **缩放**：`win resize W H` 自由尺寸；压到邻窗或越界则拒绝。
+1. **float**：唯一允许重叠的状态；退出 float 时若放不下，退回 pending。
+1. **视口**：常规模式下是输出尺寸的矩形，可在画布内**连续**移动，不吸附九个点；越界夹到画布边缘。
+1. **平移**：触控板三指滑动；鼠标默认 `Mod + 左键拖拽`。
+1. **跨工作区同动**：`win link <ws>` 把窗口链接到另一工作区的画布，两处显示同一窗口并同步；`win unlink` 解除。
 
 #### pz —— 全景
 
 |命令|语义|
 |--|--|
-|`pz toggle` / `pz on` / `pz off`|局部 1/9 ↔ 全景 1/3 显示|
-|`pz center X Y`|把视口中心挪到画布坐标|
-|`pz land X Y`|落地：跳到该点并回到局部视图|
-|`pz zoom 3`|改画布倍率（默认 3）|
-|`pz animate 200`|动画时长，0 为瞬切|
-|`pz state`|查询倍率、视口、聚焦输出|
+|`pz toggle` / `pz overview on\|off`|常规 ↔ 鸟瞰 两态切换|
+|`pz center X Y`|常规模式下把视口中心移到画布坐标|
+|`pz land X Y`|鸟瞰下落地：视口中心移到该点并回常规|
+|`pz minimap on\|off`|悬停 `[PZ]` 时是否弹出小地图（外框=画布，内框=视口）|
+|`pz animate 200`|切换动画时长，0 为瞬切|
+|`pz state`|查询模式、视口矩形、画布尺寸|
 
 #### ws / out —— 工作区与输出
 
@@ -550,20 +556,37 @@ struct Origin {
 
 |键|类型|等级|
 |-|--|--|
-|`output.<name>.scale`|1.0–3.0|requires_restart|
+|`canvas.size`|倍数（默认 3× 输出逻辑尺寸）|requires_restart|
+|`canvas.pan.mouse`|`mod-drag` / `edge`|safe|
+|`canvas.pan.trackpad_fingers`|2–4（默认 3）|requires_restart|
+|`canvas.link_max`|u32（默认 2）|requires_restart|
 |`layout.gap_inner` / `layout.gap_outer`|u32 px|safe|
-|`layout.engine`|enum|requires_restart|
+|`layout.rule.<name>`|`app_id` / `ws` / `float` / `deco` / `opacity`|safe|
 |`keybinds.<key>`|`.cdc` 路径|requires_restart|
-|`pz.zoom`|3.0|safe|
 |`pz.animation_ms`|u32|safe|
-|`pz.center`|`pointer` / `screen`|safe|
+|`pz.minimap`|bool（悬停 `[PZ]` 出小地图）|safe|
+|`pz.land_on_click`|bool|safe|
+|`dock.mode`|`always` / `auto` / `intellihide` / `hidden`|safe|
+|`dock.position`|`bottom` / `top` / `left` / `right`|safe|
+|`dock.opacity`|0.0–1.0|safe|
+|`dock.size`|u32 px|safe|
+|`dock.slot.<component>`|`start` / `center` / `end` + order|safe|
+|`dock.components`|组件列表|safe|
+|`theme.active`|主题名|safe|
+|`theme.mode`|`light` / `dark` / `auto`|safe|
+|`bg.source`|颜色 / 图片 / 渐变|safe|
+|`bg.fit`|`cover` / `contain` / `tile`|safe|
+|`deco.border_width` / `deco.border_color` / `deco.radius`|u32 / 颜色 / u32|safe|
+|`deco.shadow`|`on` / `off` / 强度|safe|
+|`deco.inactive_opacity`|0.0–1.0|safe|
 |`shell.enabled`|bool|requires_restart|
-|`shell.dock.height` / `shell.dock.position`|u32 / enum|safe|
 |`shell.in_shell_panel`|bool|requires_restart|
 |`safety.mode`|bool|safe|
 |`safety.allowed_general_keys`|list|safe|
 |`paths.actions_dir`|目录|safe|
 |`schema_version`|u32|—|
+
+窗口的瞬时状态（位置、焦点、单窗透明度、链接关系）**不进配置文件**，只存在于会话；要持久化的是画布与布局规则。
 
 新增配置项必须先改本节，再写代码。
 
@@ -622,15 +645,15 @@ slint 的 winit 后端只能出 `xdg_toplevel`，做不了 layer-shell。软件�
 
 `posix_spawn` + `setsid` + 显式环境清理，集中处理 activation token 与启动上下文关联。避免各处手写 spawn 长出孤儿。
 
-### D12 PZ 几何：局部视野 1/9 ↔ 全景视野 1/1
+### D12 PZ = 常规 ↔ 鸟瞰 两态
 
-- **世界画布** = 输出逻辑尺寸 × 3（每维 3 倍，面积 9 倍）。
-- **局部视图（默认）**：1:1 显示，视野 = 画布的 **1/9**，即正好一个屏幕。
-- **全景视图（PZ 开）**：整块画布缩放到屏幕内，比例 **1/3**，视野 = 9/9。
-- 切换入口：Dock `[PZ]` 按钮 + 快捷键；合成器侧完成视口变换，Shell UI 只切按钮状态。
-- **Dock / layer-shell 面板不参与缩放**，固定物理尺寸，否则全景下点不到。
-- 全景下点击 = 跳到该世界坐标并回到局部视图；不做「缩略图内直接拖窗」。
-- 光标固定物理尺寸，不随缩放变大。
+- **画布**是有限空间（默认 3× 输出逻辑尺寸，面积 9 屏），视口在其中**连续**移动，不吸附九宫格。
+- **常规模式**：1:1 渲染，视口 = 输出尺寸；触控板三指滑动平移，越界夹边；鼠标默认 `Mod + 左键拖拽`。
+- **鸟瞰模式**：整块画布缩放到输出内（约 1/3），看到全部内容；点击落地 = 视口中心移到该点并回常规。
+- **小地图**：悬停 Dock 的 `[PZ]` 弹出——外框是画布，内框是当前视口。
+- Dock / layer-shell 面板不缩放；光标固定物理尺寸。
+
+理由：PZ 只负责「看全局」，平移交给手势，两件事不混在一个交互里。
 
 ### 待验证 spike
 
@@ -642,9 +665,21 @@ slint 的 winit 后端只能出 `xdg_toplevel`，做不了 layer-shell。软件�
 |S4|`toml_edit` 只改目标键|改一个键 `git diff` 只有 1 行；往返幂等|整文件重写 + 注释锚点；或改 KDL|
 |S5|IPC 独立线程是否卡帧|忙时 1000 条 `apply`，主循环单帧 \< 16ms|改 io_uring / 非阻塞状态机（成本高）|
 
-### D13 白板 = 严格不重叠的自动拼图
+### D13 白板 = 有限画布上的非重叠拼图
 
-不是列式（Niri）也不是主栈（dwm）：窗口是画布上的矩形块，自动装箱、不重叠，放不下就拒绝并提示。理由：与 3×3 画布 + PZ 的设计同源，且「位置由用户决定」比「由算法决定」更符合项目定位。代价：需要装箱算法与 pending 机制，`win move` 的语义变成「平移或交换」而不是「换列」。
+不是列式（Niri）、不是主栈（dwm）、也不是网格吸附：窗口是画布上的圆角矩形节点，位置与尺寸连续可调，约束只有「不重叠、不越界、不小于 min_size」。新窗口自动找空隙，找不到就 pending 并提示。
+
+理由：位置由用户决定，比由算法决定更符合项目定位；9 屏画布 + 鸟瞰正好把「全局摆放」和「局部使用」分开。
+
+代价：装箱只负责初始放置，之后完全靠用户维护，没有自动重排；空间用尽时只能靠用户腾地方。
+
+### D17 跨工作区同动（link）
+
+同一个窗口可以链接到另一个工作区的画布，两处显示同一内容并同步位置/尺寸/状态；`win link <ws>` / `win unlink`。
+
+理由：把「这个终端两个桌面都要」从「开两份」变成一份。
+
+代价：焦点、输入区域与关闭语义需要额外定义（见 G19）。
 
 ### D14 装饰：默认无标题栏，单应用可切 CSD / SSD
 
@@ -675,10 +710,10 @@ cdc 改的是会话状态，重启回落到配置文件。只有 `@persist` 作�
 |--|--|----|-|
 |0 地基|`chaos-path` / `cdc-parser` / `chaos-config` / `chaos-ipc` / `cdc` CLI / 设置应用最小版|在 KDE 里可用 `cdc validate` 与设置应用；零图形依赖；全链路有测试|4–5|
 |1 合成器|`--nested`（winit，默认开发形态）+ `--headless`（CI）+ udev/DRM、libinput、xdg-shell、activation|嵌套窗口里跑 kitty 能打字能退出；`--headless` 能出帧；TTY 带看门狗验证|5–6|
-|2 平铺|`LayoutEngine`、configure 回路、焦点/移动、layer-shell + popup|10 窗口不闪烁；waybar 可挂且独占区生效|4|
+|2 白板|装箱算法、自由移动/缩放、pending、configure 回路、layer-shell + popup|10 窗口不闪烁；放不下进 pending；waybar 可挂|4|
 |3 配置接入|在线配置服务、热重载、快照回退、systemd 托管|坏配置连续失败两次 → 自动进恢复模式|2–3|
 |4 in-shell|`chaos-settings --in-shell` 子进程|`kill -9` 面板不影响合成器；禁用后面板功能对等|2|
-|5 PZ|静态两档 → 动画 → 边界（见 D12）|点击落点像素级对齐；1/3 档帧时间 \< 8ms|4–5|
+|5 PZ|常规/鸟瞰两态、三指平移、小地图、动画、边界（见 D12）|落点像素级对齐；鸟瞰帧时间 \< 8ms|4–5|
 |6 Shell|Dock / 启动器 / 落点指示器 / PCManFM-Qt 兼容|Dock 常驻静态 CPU \< 3%；启动窗口落到预期列|4–6|
 |7 打包|PKGBUILD（release + `-git`）、systemd unit、desktop 文件|干净 chroot 里 `makepkg -si` 后能从 TTY 起会话|1–2|
 |8 叠层|叠层模式、动画美化|按日常使用反馈排优先级|—|
@@ -736,7 +771,7 @@ cdc 改的是会话状态，重启回落到配置文件。只有 `@persist` 作�
 
 |ID|缺口|取值|状态|
 |--|--|--|--|
-|G1|多输出 / 工作区模型|每输出独立工作区集合；PZ 作用于聚焦输出；热插拔时窗口归主输出并按插入顺序重排|默认|
+|G1|多输出 / 工作区模型|每输出 × 每工作区各一块独立画布（默认 3× 输出逻辑尺寸）；PZ 只作用聚焦输出；视口连续移动不吸附；热插拔时窗口归主输出并按插入顺序重排|**已定**|
 |G2|`.cdc` 词法细节|见 §`.cdc` 与解析器契约 的「词法决策」表|默认|
 |G3|`@no-error-output` 索引基准|当前执行单元内、含指令自身、1 基、缩进块独立编号|默认|
 |G4|安全等级静态判定边界|子文件缺失 = 报错；环引用 = 报错；`xfile` 一律 general；不做 `# cdc-safety:` 文件头|默认|
@@ -748,7 +783,7 @@ cdc 改的是会话状态，重启回落到配置文件。只有 `@persist` 作�
 |G10|配置版本与迁移|顶层 `schema_version`，纯函数迁移链，迁移前快照，失败回退默认|默认|
 |G11|安全模式定义|连续 2 次启动失败触发；加载最近通过快照、跳 general 键、禁用 xfile、启 `--recovery`|默认|
 |G12|快照策略|`$XDG_STATE_HOME/chaos-desktop/snapshots/`，保留 20 份|默认|
-|G13|PZ 精确定义|见决策 D12：画布 3×3，局部 1/9，全景 1/3 显示，Dock 不缩放，点击跳转|**已定**|
+|G13|PZ 精确定义|见 D12：常规 ↔ 鸟瞰两态，鸟瞰约 1/3，点击落地，悬停出小地图，Dock 不缩放|**已定**|
 |G14|性能预算|空闲 CPU \< 1% / RSS \< 150 MiB；帧 \< 8ms（120Hz）；Dock 静态 \< 3%|默认|
 |G15|输入法与无障碍|阶段 2 预留 `text-input-v3` 扩展点；阶段 8 实现 IME；无障碍进 backlog|默认|
 |G16|剪贴板与拖放|v0.1 只做「接受 DnD 到 Dock 图标 + 落点高亮」；剪贴板保证 kitty ↔ PCManFM-Qt 可用|默认|
@@ -777,8 +812,8 @@ cdc 改的是会话状态，重启回落到配置文件。只有 `@persist` 作�
 |新窗口放不下|先按 preferred size 找，失败缩到 min_size 再找，仍失败进 pending，不 map|
 |pending 生命周期|布局每次变动自动重试一次；也可 `win retry` 手动重试；会话结束丢弃|
 |落点顺序|当前局部视口内由左上开始扫描，其次按距离向外扩|
-|move 无空隙|与目标方向最近邻交换，不推挤整行|
-|resize 压到邻窗|拒绝并提示，不自动推挤|
+|移动/缩放冲突|直接拒绝并提示，不推挤、不吸附|
+|视口越界|夹到画布边缘，不产生空白|
 |float 退出时放不下|回到 pending，提示用户腾位置|
 |同尺寸多空隙|取距离视口中心最近的一个，保证可预测|
 
@@ -791,6 +826,16 @@ cdc 改的是会话状态，重启回落到配置文件。只有 `@persist` 作�
 |输入|全键盘 + 指针；`Mod+Esc` 无条件退出|
 |崩溃|panic hook 落日志，进程退出，外层窗口关闭，不残留子进程|
 |看门狗|60s 无输入 / 无帧 → 退出（仅 TTY 模式启用）|
+
+### G19 跨工作区同动的语义（默认）
+
+|问题|默认取值|
+|--|----|
+|渲染|同一 surface 在两个工作区各渲染一次，内容共享|
+|坐标|两处保持同一相对位置；切换工作区不改坐标|
+|焦点|同一时间只有一个工作区可见，焦点跟随可见的那份|
+|关闭|任一处关闭即整体关闭|
+|上限|最多链接 2 个工作区；超出报 E3xx|
 
 ## 工程规范
 

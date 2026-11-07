@@ -120,10 +120,11 @@ cdc --verbose <file.cdc>     # 打印每条被执行的命令
 | `win focus left\|right\|up\|down` | 方向焦点（几何最近邻） | 规划 |
 | `win focus last` | 回到上一个焦点窗口 | 规划 |
 | `win focus --match app_id=…` | 按条件选中 | 规划 |
-| `win move left\|right\|up\|down` | 该方向有空隙则平移，否则与最近邻交换 | 规划 |
+| `win move left\|right\|up\|down [px]` | 步进平移（默认 32px），冲突则拒绝 | 规划 |
+| `win move X Y` | 绝对坐标；重叠或越界则拒绝 | 规划 |
+| `win move by DX DY` | 相对位移 | 规划 |
 | `win swap --with <match>` | 与指定窗口交换两块 | 规划 |
-| `win place X Y` | 绝对移动；会重叠则拒绝 | 规划 |
-| `win resize WxH` | 绝对尺寸（受 min/max 约束） | 规划 |
+| `win resize W H` | 自由尺寸（受 min_size 约束） | 规划 |
 | `win resize grow\|shrink [px]` | 相对尺寸；只吃空隙，压到邻窗拒绝 | 规划 |
 | `win close` | 发 `xdg_toplevel.close` | 规划 |
 | `win stash` | 从画布收起，Dock 留位 | 规划 |
@@ -137,30 +138,33 @@ cdc --verbose <file.cdc>     # 打印每条被执行的命令
 | `win center` | 居中到当前视口 | 规划 |
 | `win raise` / `win lower` | 层级（float / 叠层用） | 规划 |
 | `win retry` | 重试处于 pending 的窗口 | 规划 |
+| `win link <ws>` / `win unlink` | 跨工作区同动 / 解除 | 规划 |
 
-### 白板模型（拼图）
+### 白板模型（有限画布 + 拼图）
 
-平铺不是列式也不是主栈，而是**严格不重叠的自动拼图**：
+平铺不是列式，也不是主栈，而是**有限空间上的白板**：
 
-1. **摆放区域** = 当前工作区的 3×3 画布（与 PZ 同源）。
-2. **新窗口**按 `preferred size` 找空隙；找不到就缩到 `min_size` 再找；仍然找不到 → 进入 **pending**。
-3. **pending**：不 map、Dock 显示「待放置」占位、合成器给一次提示。用户调整布局后 `win retry` 重试（布局每次变动也自动重试一次）。
-4. **落点优先级**：当前局部视口内 → 视口外由近及远。
-5. **move**：目标方向有空隙就平移过去；没有空隙就与最近邻交换。
-6. **resize**：只允许吃掉空隙；压到邻窗 → 拒绝并提示（不自动推挤，行为可预测优先）。
-7. **float 是唯一允许重叠的状态**；退出 float 时若放不下，退回 pending。
-8. 网格只用于吸附参考，不是约束：块可以是不规则尺寸。
+1. **画布**：每个工作区一块独立画布，默认 = 输出逻辑尺寸 × 3（面积 9 屏），是**有限空间**，不划分网格。
+2. **节点**：窗口是圆角矩形，可自由移动、自由缩放。约束只有三条——不重叠、不越界、不小于 `min_size`。
+3. **新窗口**：按 `preferred size` 找空隙；失败则缩到 `min_size` 再找；仍失败 → **pending**（不 map、Dock 占位、提示一次）。布局变动自动重试一次，也可 `win retry`。
+4. **落点优先级**：当前视口内 → 视口外由近及远。
+5. **移动**：`win move X Y` 绝对坐标，`win move by DX DY` 相对位移，`win move left|right|up|down [px]` 步进微调；目标冲突直接拒绝，不推挤、不吸附。
+6. **缩放**：`win resize W H` 自由尺寸；压到邻窗或越界则拒绝。
+7. **float**：唯一允许重叠的状态；退出 float 时若放不下，退回 pending。
+8. **视口**：常规模式下是输出尺寸的矩形，可在画布内**连续**移动，不吸附九个点；越界夹到画布边缘。
+9. **平移**：触控板三指滑动；鼠标默认 `Mod + 左键拖拽`。
+10. **跨工作区同动**：`win link <ws>` 把窗口链接到另一工作区的画布，两处显示同一窗口并同步；`win unlink` 解除。
 
 ### pz —— 全景
 
 | 命令 | 语义 |
 |---|---|
-| `pz toggle` / `pz on` / `pz off` | 局部 1/9 ↔ 全景 1/3 显示 |
-| `pz center X Y` | 把视口中心挪到画布坐标 |
-| `pz land X Y` | 落地：跳到该点并回到局部视图 |
-| `pz zoom 3` | 改画布倍率（默认 3） |
-| `pz animate 200` | 动画时长，0 为瞬切 |
-| `pz state` | 查询倍率、视口、聚焦输出 |
+| `pz toggle` / `pz overview on\|off` | 常规 ↔ 鸟瞰 两态切换 |
+| `pz center X Y` | 常规模式下把视口中心移到画布坐标 |
+| `pz land X Y` | 鸟瞰下落地：视口中心移到该点并回常规 |
+| `pz minimap on\|off` | 悬停 `[PZ]` 时是否弹出小地图（外框=画布，内框=视口） |
+| `pz animate 200` | 切换动画时长，0 为瞬切 |
+| `pz state` | 查询模式、视口矩形、画布尺寸 |
 
 ### ws / out —— 工作区与输出
 

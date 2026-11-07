@@ -7,7 +7,7 @@
 ```text
 合成器进程（chaos-compositor, Smithay）
 ├─ 配置服务：加载 / 校验 / 快照 / 热重载 / IPC 端点
-├─ 布局引擎：LayoutEngine trait，可插拔
+├─ 布局引擎：白板装箱 + 自由移动（LayoutEngine trait）
 ├─ cdc-parser（进程内）：解析 → 执行计划
 ├─ IPC 服务：独立线程，阻塞 IO + calloop channel 回主循环
 └─ in-shell 面板：独立子进程（崩溃隔离），默认启用、可禁用

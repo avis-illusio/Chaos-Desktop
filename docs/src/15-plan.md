@@ -10,10 +10,10 @@
 |---|---|---|---|
 | 0 地基 | `chaos-path` / `cdc-parser` / `chaos-config` / `chaos-ipc` / `cdc` CLI / 设置应用最小版 | 在 KDE 里可用 `cdc validate` 与设置应用；零图形依赖；全链路有测试 | 4–5 |
 | 1 合成器 | `--nested`（winit，默认开发形态）+ `--headless`（CI）+ udev/DRM、libinput、xdg-shell、activation | 嵌套窗口里跑 kitty 能打字能退出；`--headless` 能出帧；TTY 带看门狗验证 | 5–6 |
-| 2 平铺 | `LayoutEngine`、configure 回路、焦点/移动、layer-shell + popup | 10 窗口不闪烁；waybar 可挂且独占区生效 | 4 |
+| 2 白板 | 装箱算法、自由移动/缩放、pending、configure 回路、layer-shell + popup | 10 窗口不闪烁；放不下进 pending；waybar 可挂 | 4 |
 | 3 配置接入 | 在线配置服务、热重载、快照回退、systemd 托管 | 坏配置连续失败两次 → 自动进恢复模式 | 2–3 |
 | 4 in-shell | `chaos-settings --in-shell` 子进程 | `kill -9` 面板不影响合成器；禁用后面板功能对等 | 2 |
-| 5 PZ | 静态两档 → 动画 → 边界（见 D12） | 点击落点像素级对齐；1/3 档帧时间 < 8ms | 4–5 |
+| 5 PZ | 常规/鸟瞰两态、三指平移、小地图、动画、边界（见 D12） | 落点像素级对齐；鸟瞰帧时间 < 8ms | 4–5 |
 | 6 Shell | Dock / 启动器 / 落点指示器 / PCManFM-Qt 兼容 | Dock 常驻静态 CPU < 3%；启动窗口落到预期列 | 4–6 |
 | 7 打包 | PKGBUILD（release + `-git`）、systemd unit、desktop 文件 | 干净 chroot 里 `makepkg -si` 后能从 TTY 起会话 | 1–2 |
 | 8 叠层 | 叠层模式、动画美化 | 按日常使用反馈排优先级 | — |
